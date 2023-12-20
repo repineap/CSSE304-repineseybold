@@ -3,6 +3,8 @@
 (require "../chez-init.rkt")
 (provide bintree-to-list bintree-add leaf-node interior-node parse-exp unparse-exp)
 
+;List of can be used to check for a list of things!!!!!!!
+; (define list-of-number (list-of? number?))
 
 (define-datatype bintree bintree?
   (leaf-node
@@ -46,11 +48,11 @@
   [lit-exp
    (data number?)]
   [lambda-exp
-   (id (cond-list? symbol?))
-   (body (cond-list? expression?))]
+   (vars (list-of? symbol?))
+   (body (list-of? expression?))]
   [app-exp
-   (rator expression?)
-   (rand expression?)])
+   (op expression?)
+   (args (list-of? expression?))])
 
 ; Procedures to make the parser a little bit saner.
 (define 1st car)
@@ -81,14 +83,6 @@
     (cases expression x
       [var-exp (id) #t]
       [else #f])))
-
-(define cond-list?
-  (lambda (cond)
-    (let ([not-cond (lambda (x)
-                      (not (cond x)))])
-      (lambda (ls)
-        (if (null? (filter not-cond ls)) #t
-            #f)))))
 
 ;My code to edit
 
