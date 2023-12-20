@@ -60,23 +60,45 @@
 (define 3rd caddr)
 
 (define parse-exp         
-  (lambda (datum)
+  (lambda (exp)
     (cond
-      [(symbol? datum) (var-exp datum)]
-      [(number? datum) (lit-exp datum)]
-      [(pair? datum)
+      [(symbol? exp) (var-exp exp)]
+      [(number? exp) (lit-exp exp)]
+      [(pair? exp)
        (cond
-         [(eqv? (car datum) 'lambda)
-          (lambda-exp (car (2nd  datum))
-                      (parse-exp (3rd datum)))]
-         [else (app-exp (parse-exp (1st datum))
-                        (parse-exp (2nd datum)))])]
-      [else (error 'parse-exp "bad expression: ~s" datum)])))
+         [(eqv? (car exp) 'lambda)
+          (lambda-exp (2nd  exp)
+                      (parse-exps (cddr exp)))]
+         [else (app-exp (parse-exp (1st exp))
+                        (parse-exps (cdr exp)))])]
+      [else (error 'parse-exp "bad expression: ~s" exp)])))
 
 (define unparse-exp
   (lambda (exp)
-    (nyi)))
+    (cases expression exp
+      [var-exp (sym) sym]
+      [lit-exp (val) val]
+      [lambda-exp (vars bodies)
+                  (append (list 'lambda
+                        vars)
+                        (unparse-exps bodies))]
+      [app-exp (op args)
+               (append (list (unparse-exp op))
+                       (unparse-exps args))])))
 
+(define parse-exps
+  (lambda (ls)
+    (let loop ([l ls]
+               [r '()])
+      (if (null? l) r
+          (loop (cdr l) (append r (list (parse-exp (car l)))))))))
+
+(define unparse-exps
+  (lambda (ls)
+    (let loop ([l ls]
+               [r '()])
+      (if (null? l) r
+          (loop (cdr l) (append r (list (unparse-exp (car l)))))))))
 ; An auxiliary procedure that could be helpful.
 (define var-exp?
   (lambda (x)
@@ -85,6 +107,24 @@
       [else #f])))
 
 ;My code to edit
+
+;; (define unparse-expression
+;;   (lambda (exp)
+;;     (cases expression exp
+;;       [var-exp (id) id]
+;;       [lambda-exp (id body)
+;;                   (list 'lambda (list id)
+;;                         (unparse-expression body))]
+;;       [app-exp (proc arg)
+;;                (list (unparse-expression proc)
+;;                      (unparse-expression arg))]
+;;       [if-exp (cond then else)
+;;               (list 'if
+;;                     (unparse-expression cond)
+;;                     (unparse-expression then)
+;;                     (unparse-expression else))]
+;;       [num-exp (num)
+;;                num])))
 
 (define lite-recur-def
   (lambda (init sym-f true-f false-f if-f lambda-f let-f list-f colon-f id-f)
