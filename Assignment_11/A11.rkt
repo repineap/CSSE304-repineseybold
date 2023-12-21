@@ -161,6 +161,13 @@
         (if (null? v) (list r lc)
             (loop (cdr v) (append r (list (caar v))) (append lc (list (cadar v))))))))
 
+;Test cases to check
+(define tester
+  (lambda (ls)
+    (printf "~s: ~s\n" ls (equal? ls (unparse-exp (parse-exp ls))))))
+(tester '(lambda (x) x(+ x y)))
+(tester '(lambda (x) (+)))
+
 ;;--------  Used by the testing mechanism   ------------------
 
 (define-syntax nyi
