@@ -48,16 +48,42 @@
   [lit-exp
    (data number?)]
   [lambda-exp
-   (vars (list-of? symbol?))
-   (body (list-of? expression?))]
+   (vars (listof symbol?))
+   (body (listof expression?))]
+  [lambda-rest-exp
+   (var symbol?)
+   (body (listof expression?))]
   [app-exp
    (op expression?)
-   (args (list-of? expression?))])
+   (args (listof expression?))]
+  [let-exp
+   (defs (listof binding?))
+   (bodies (listof expression?))]
+  [let*-exp
+   (nested-lets expression?)
+   (bodies (listof expression?))]
+  [end-exp]
+  [letrec-exp
+   (defs (listof binding?))
+   (bodies (listof expression?))]
+  [namedlet-exp
+   (name symbol?)
+   (defs (listof binding?))
+   (bodies (listof expression?))])
+
+(define binding?
+  (lambda (val)
+    (cond
+      [(not (pair? val)) #f]
+      [(not (symbol? (car val))) #f]
+      [(not (expression? (cdr val))) #f]
+      [else #t])))
 
 ; Procedures to make the parser a little bit saner.
 (define 1st car)
 (define 2nd cadr)
 (define 3rd caddr)
+(define 4th cadddr)
 
 (define parse-exp         
   (lambda (exp)
@@ -67,8 +93,21 @@
       [(pair? exp)
        (cond
          [(eqv? (car exp) 'lambda)
-          (lambda-exp (2nd  exp)
-                      (parse-exps (cddr exp)))]
+          (if (list? (cadr exp)) (lambda-exp (2nd  exp)
+                                             (parse-exps (cddr exp)))
+              (lambda-rest-exp (2nd exp)
+                              (parse-exps (cddr exp))))]
+         [(eqv? (car exp) 'let)
+          (if (symbol? (cadr exp)) (namedlet-exp (2nd exp)
+                                                 (parse-lets (3rd exp))
+                                                 (parse-exps (cdddr exp)))
+              (let-exp (parse-lets (2nd exp))
+                       (parse-exps (cddr exp))))]
+         [(eqv? (car exp) 'let*) (let*-exp (let-star-parse (2nd exp)
+                                                           (end-exp))
+                                           (parse-exps (cddr exp)))]
+         [(eqv? (car exp) 'letrec) (letrec-exp (parse-lets (2nd exp))
+                                               (parse-exps (cddr exp)))]
          [else (app-exp (parse-exp (1st exp))
                         (parse-exps (cdr exp)))])]
       [else (error 'parse-exp "bad expression: ~s" exp)])))
@@ -82,9 +121,32 @@
                   (append (list 'lambda
                         vars)
                         (unparse-exps bodies))]
+      [lambda-rest-exp (var bodies)
+                       (append (list 'lambda
+                        var)
+                        (unparse-exps bodies))]
       [app-exp (op args)
                (append (list (unparse-exp op))
-                       (unparse-exps args))])))
+                       (unparse-exps args))]
+      [let-exp (vars bodies)
+               (append (list 'let
+                             (unparse-lets vars))
+                       (unparse-exps bodies))]
+      [let*-exp (lets bodies)
+                (append (list 'let*
+                              (unparse-let* lets))
+                        (unparse-exps bodies))]
+      [end-exp ()
+               'error]
+      [letrec-exp (vars bodies)
+                  (append (list 'letrec
+                                (unparse-lets vars))
+                          (unparse-exps bodies))]
+      [namedlet-exp (name vars bodies)
+                    (append (list 'let
+                                  name
+                                  (unparse-lets vars))
+                            (unparse-exps bodies))])))
 
 (define parse-exps
   (lambda (ls)
@@ -93,12 +155,40 @@
       (if (null? l) r
           (loop (cdr l) (append r (list (parse-exp (car l)))))))))
 
+(define parse-lets
+  (lambda (defs)
+    (let loop ([d defs]
+               [r '()])
+      (if (null? d) r
+          (loop (cdr d) (append r (list (cons (caar d) (parse-exp (cadar d))))))))))
+
+(define let-star-parse
+  (lambda (vars bodies)
+    (let loop ([v vars])
+      (if (= (length v) 1) (let-exp (parse-lets (list (car v)))
+                                    (list bodies))
+          (let-exp (parse-lets (list (car v)))
+                   (list (loop (cdr v))))))))
+
 (define unparse-exps
   (lambda (ls)
     (let loop ([l ls]
                [r '()])
       (if (null? l) r
           (loop (cdr l) (append r (list (unparse-exp (car l)))))))))
+
+(define unparse-lets
+  (lambda (bindings)
+    (let loop ([b bindings]
+               [r '()])
+      (if (null? b) r
+          (loop (cdr b) (append r (list (list (caar b)
+                                        (unparse-exp (cdar b))))))))))
+
+(define unparse-let*
+  (lambda (lets)
+    (if (equal? (car lets) 'end-exp) '()
+        (append (list (list (caaadr lets) (unparse-exp (cdaadr lets)))) (unparse-let* (caaddr lets))))))
 ; An auxiliary procedure that could be helpful.
 (define var-exp?
   (lambda (x)
@@ -167,6 +257,20 @@
     (printf "~s: ~s\n" ls (equal? ls (unparse-exp (parse-exp ls))))))
 (tester '(lambda (x) x(+ x y)))
 (tester '(lambda (x) (+)))
+(tester '(lambda x (+ x y)))
+(tester '(let ((a 1)
+               (b 2))
+           (+ a b)))
+(tester '(let* ((a 1)
+                (b (+ a 2)))
+           (+ a b)))
+(tester '(letrec ((a (lambda (x)
+                       x))
+                  (b 1))
+           (a 1)))
+(tester '(let loop ((l ls)
+                    (r 1))
+           (loop 1)))
 
 ;;--------  Used by the testing mechanism   ------------------
 
