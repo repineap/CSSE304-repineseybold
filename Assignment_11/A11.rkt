@@ -43,10 +43,8 @@
 ; You will want to replace this with your parser that includes more expression types, more options for these types, and error-checking.
 
 (define-datatype expression expression?
-  [var-exp
-   (id symbol?)]
   [lit-exp
-   (data number?)]
+   (data lit-exp?)]
   [lambda-exp
    (vars (listof symbol?))
    (body (listof expression?))]
@@ -69,7 +67,17 @@
   [namedlet-exp
    (name symbol?)
    (defs (listof binding?))
-   (bodies (listof expression?))])
+   (bodies (listof expression?))]
+  [if-exp
+   (conditional expression?)
+   (then expression?)
+   (else expression?)]
+  [when-exp
+   (conditional expression?)
+   (then expression?)]
+  [set!-exp
+   (id symbol?)
+   (def expression?)])
 
 (define binding?
   (lambda (val)
@@ -78,6 +86,17 @@
       [(not (symbol? (car val))) #f]
       [(not (expression? (cdr val))) #f]
       [else #t])))
+
+(define lit-exp?
+  (lambda (val)
+    (cond
+      [(number? val) #t]
+      [(string? val) #t]
+      [(symbol? val) #t]
+      [(equal? #t val) #t]
+      [(equal? (car val) (quote quote)) #t]
+      [(equal? #f val) #t]
+      [else #f])))
 
 ; Procedures to make the parser a little bit saner.
 (define 1st car)
@@ -88,34 +107,54 @@
 (define parse-exp         
   (lambda (exp)
     (cond
-      [(symbol? exp) (var-exp exp)]
-      [(number? exp) (lit-exp exp)]
+      [(lit-exp? exp) (lit-exp exp)]
       [(pair? exp)
        (cond
          [(eqv? (car exp) 'lambda)
+          (let ([c (lambda-checker exp)]) (when c c))
           (if (list? (cadr exp)) (lambda-exp (2nd  exp)
                                              (parse-exps (cddr exp)))
               (lambda-rest-exp (2nd exp)
                               (parse-exps (cddr exp))))]
          [(eqv? (car exp) 'let)
-          (if (symbol? (cadr exp)) (namedlet-exp (2nd exp)
-                                                 (parse-lets (3rd exp))
-                                                 (parse-exps (cdddr exp)))
-              (let-exp (parse-lets (2nd exp))
-                       (parse-exps (cddr exp))))]
-         [(eqv? (car exp) 'let*) (let*-exp (let-star-parse (2nd exp)
-                                                           (end-exp))
-                                           (parse-exps (cddr exp)))]
-         [(eqv? (car exp) 'letrec) (letrec-exp (parse-lets (2nd exp))
-                                               (parse-exps (cddr exp)))]
-         [else (app-exp (parse-exp (1st exp))
-                        (parse-exps (cdr exp)))])]
+          (if (symbol? (cadr exp)) (begin (let ([c (let-checker (cdr exp))]) (when c c))
+                                          (namedlet-exp (2nd exp)
+                                                        (parse-lets (3rd exp))
+                                                        (parse-exps (cdddr exp))))
+              (begin (let ([c (let-checker exp)]) (when c c))
+                     (let-exp (parse-lets (2nd exp))
+                              (parse-exps (cddr exp)))))]
+         [(eqv? (car exp) 'let*)
+          (let ([c (let-checker exp)]) (when c c))
+          (let*-exp (let-star-parse (2nd exp)
+                                    (end-exp))
+                    (parse-exps (cddr exp)))]
+         [(eqv? (car exp) 'letrec)
+          (let ([c (let-checker exp)]) (when c c))
+          (letrec-exp (parse-lets (2nd exp))
+                      (parse-exps (cddr exp)))]
+         [(eqv? (car exp) 'if)
+          (let ([c (if-checker exp)]) (when c c))
+          (if (null? (cdddr exp)) (when-exp (parse-exp (cadr exp))
+                                                                 (parse-exp (caddr exp)))
+                                   (if-exp (parse-exp (cadr exp))
+                                           (parse-exp (caddr exp))
+                                           (parse-exp (cadddr exp))))]
+         [(eqv? (car exp) 'set!)
+          (let ([c (set!-checker exp)]) (when c c))
+          (let ([body (parse-exp (caddr exp))])
+            (if (body-checker body) (error 'parse-exp "bad set! body: ~s" exp)
+                (set!-exp (cadr exp)
+                          body)))]
+         [else
+          (let ([c (app-checker exp)]) (when c c))
+          (app-exp (parse-exp (car exp))
+                   (parse-exps (cdr exp)))])]
       [else (error 'parse-exp "bad expression: ~s" exp)])))
 
 (define unparse-exp
   (lambda (exp)
     (cases expression exp
-      [var-exp (sym) sym]
       [lit-exp (val) val]
       [lambda-exp (vars bodies)
                   (append (list 'lambda
@@ -146,7 +185,26 @@
                     (append (list 'let
                                   name
                                   (unparse-lets vars))
-                            (unparse-exps bodies))])))
+                            (unparse-exps bodies))]
+      [if-exp (cond then else)
+              (list 'if
+                    (unparse-exp cond)
+                    (unparse-exp then)
+                    (unparse-exp else))]
+      [when-exp (cond then)
+                (list 'if
+                      (unparse-exp cond)
+                      (unparse-exp then))]
+      [set!-exp (id def)
+                (list 'set!
+                      id
+                      (unparse-exp def))])))
+
+(define body-checker
+  (lambda (exp)
+    (cases expression exp
+      [lit-exp (val) #f]
+      [else #t])))
 
 (define parse-exps
   (lambda (ls)
@@ -169,6 +227,48 @@
                                     (list bodies))
           (let-exp (parse-lets (list (car v)))
                    (list (loop (cdr v))))))))
+
+(define lambda-checker
+  (lambda (exp)
+    (cond
+      [(null? (cdr exp)) (error 'parse-exp "lambda missing vars: ~s" exp)]
+      [(null? (cddr exp)) (error 'parse-exp "lambda missing body: ~s" exp)]
+      [(and (not (symbol? (cadr exp))) (not ((listof symbol?) (cadr exp)))) (error 'parse-exp "non-symbol var: ~s" exp)]
+      [else #f])))
+
+(define app-checker
+  (lambda (exp)
+    (cond
+      [(and (pair? exp) (not (list? exp))) (error 'parse-exp "app pair: ~s" exp)]
+      [else #f])))
+
+(define if-checker
+  (lambda (exp)
+    (cond
+      [(null? (cdr exp)) (error 'parse-exp "if missing cond: ~s" exp)]
+      [(null? (cddr exp)) (error 'parse-exp "if missing then: ~s" exp)])))
+
+(define let-checker
+  (lambda (exp)
+    (cond
+      [(null? (cdr exp)) (error 'parse-exp "let bindings null: ~s" exp)]
+      [(null? (cddr exp)) (error 'parse-exp "let bodies missing: ~s" exp)]
+      [(and (pair? (cadr exp)) (not (list? (cadr exp)))) (error 'parse-exp "let bindings bad: ~s" exp)]
+      [(not ((listof valid-binding?) (cadr exp))) (error 'parse-exp "let bindings bad: ~s" exp)]
+      [else #f])))
+
+(define set!-checker
+  (lambda (exp)
+    (cond
+      [(null? (cdr exp)) (error 'parse-exp "set! var missing: ~s" exp)]
+      [(null? (cddr exp)) (error 'parse-exp "set! def missing: ~s" exp)]
+      [else #f])))
+
+(define valid-binding?
+  (lambda (val)
+    (and (list? val)
+         (= 2 (length val))
+         (symbol? (car val)))))
 
 (define unparse-exps
   (lambda (ls)
@@ -252,25 +352,30 @@
             (loop (cdr v) (append r (list (caar v))) (append lc (list (cadar v))))))))
 
 ;Test cases to check
-(define tester
-  (lambda (ls)
-    (printf "~s: ~s\n" ls (equal? ls (unparse-exp (parse-exp ls))))))
-(tester '(lambda (x) x(+ x y)))
-(tester '(lambda (x) (+)))
-(tester '(lambda x (+ x y)))
-(tester '(let ((a 1)
-               (b 2))
-           (+ a b)))
-(tester '(let* ((a 1)
-                (b (+ a 2)))
-           (+ a b)))
-(tester '(letrec ((a (lambda (x)
-                       x))
-                  (b 1))
-           (a 1)))
-(tester '(let loop ((l ls)
-                    (r 1))
-           (loop 1)))
+;; (define tester
+;;   (lambda (ls)
+;;     (printf "~s: ~s\n" ls (equal? ls (unparse-exp (parse-exp ls))))))
+;; (tester '(lambda (x) x(+ x y)))
+;; (tester '(lambda (x) (+)))
+;; (tester '(lambda x (+ x y)))
+;; (tester '(let ((a 1)
+;;                (b 2))
+;;            (+ a b)))
+;; (tester '(let* ((a 1)
+;;                 (b (+ a 2)))
+;;            (+ a b)))
+;; (tester '(letrec ((a (lambda (x)
+;;                        x))
+;;                   (b 1))
+;;            (a 1)))
+;; (tester '(let loop ((l ls)
+;;                     (r 1))
+;;            (loop 1)))
+;; (tester '(if (= x 1) x))
+;; (tester '(if (or (= x 1) (< x 10)) (+ x 10)
+;;              x))
+;; (tester '(set! x 1))
+;; (tester '(set! x #t))
 
 ;;--------  Used by the testing mechanism   ------------------
 
