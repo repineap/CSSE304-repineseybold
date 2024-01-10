@@ -43,6 +43,8 @@
 ; You will want to replace this with your parser that includes more expression types, more options for these types, and error-checking.
 
 (define-datatype expression expression?
+  [var-exp
+   (var symbol?)]
   [lit-exp
    (data lit-exp?)]
   [lambda-exp
@@ -92,7 +94,6 @@
     (cond
       [(number? val) #t]
       [(string? val) #t]
-      [(symbol? val) #t]
       [(equal? #t val) #t]
       [(equal? (car val) (quote quote)) #t]
       [(equal? #f val) #t]
@@ -107,6 +108,7 @@
 (define parse-exp         
   (lambda (exp)
     (cond
+      [(symbol? exp) (var-exp exp)]
       [(lit-exp? exp) (lit-exp exp)]
       [(pair? exp)
        (cond
@@ -155,6 +157,7 @@
 (define unparse-exp
   (lambda (exp)
     (cases expression exp
+      [var-exp (var) var]
       [lit-exp (val) val]
       [lambda-exp (vars bodies)
                   (append (list 'lambda
