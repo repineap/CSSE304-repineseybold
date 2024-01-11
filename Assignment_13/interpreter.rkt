@@ -430,7 +430,13 @@
       [quote-exp (data) (cadr data)]
       ;;Variables such as x or + use the environment to apply their values
       [var-exp (id)
-               (apply-env env id)]
+               (apply-env env id)] 
+      ;;Let expressions !!!!!Not finished from class 
+       [let-exp (defs bodies)
+               (last (eval-exps bodies
+                          (extend-env (map car defs)
+                           (list->vector (eval-exps (map cdr defs) env))
+                           env)))]
       ;;Apps determine the value of the operator from the environment, then evaluate all the expressions and apply the proc to that
       [app-exp (op args)
                (let ([proc-value (eval-exp op env)]
@@ -523,7 +529,7 @@
       [(pair?) (pair? (1st args))]
       [(procedure?) (proc-val? (1st args))]
       [(vector->list) (vector->list (1st args))]
-      [(vector) (vector (1st args))]
+      [(vector) (list->vector args)]
       [(make-vector) (make-vector (1st args))]
       [(vector-ref) (vector-ref (1st args) (2nd args))]
       [(vector?) (vector? (1st args))]
