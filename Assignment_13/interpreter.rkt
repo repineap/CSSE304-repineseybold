@@ -36,10 +36,10 @@
    (data lit-exp?)]
   [lambda-exp
    (vars (listof symbol?))
-   (body (listof expression?))]
+   (body (list-of? expression?))]
   [lambda-rest-exp
    (var symbol?)
-   (body (listof expression?))]
+   (body (list-of? expression?))]
   [app-exp
    (op expression?)
    (args (listof expression?))]
@@ -84,7 +84,7 @@
   [empty-env-record]
   [extended-env-record
    (syms (list-of? symbol?))
-   (vals (vector-of? scheme-value?))
+   (vals vector?)
    (env environment?)])
 
 (define vector-of?
@@ -100,7 +100,7 @@
    (name symbol?)]
   [closure
    (id (list-of? symbol?))
-   (body (list-of? expression?))
+   (bodies (list-of? expression?))
    (env environment?)])
 
 ;-------------------+
@@ -169,7 +169,7 @@
           (if (list? (cadr exp)) (lambda-exp (2nd  exp)
                                              (parse-exps (cddr exp)))
               (lambda-rest-exp (2nd exp)
-                              (parse-exps (cddr exp))))]
+                               (parse-exps (cddr exp))))]
          [(eqv? (car exp) 'let)
           (if (symbol? (cadr exp)) (begin (let ([c (let-checker (cdr exp))]) (when c c))
                                           (namedlet-exp (2nd exp)
@@ -215,11 +215,11 @@
       [lambda-exp (vars bodies)
                   (append (list 'lambda
                         vars)
-                        (unparse-exps bodies))]
+                        (unparse-exps (vector->list bodies)))]
       [lambda-rest-exp (var bodies)
                        (append (list 'lambda
                         var)
-                        (unparse-exps bodies))]
+                        (unparse-exps (vector->list bodies)))]
       [app-exp (op args)
                (append (list (unparse-exp op))
                        (unparse-exps args))]
@@ -415,33 +415,40 @@
 ; top-level-eval evaluates a form in the global environment
 
 (define top-level-eval
-  (lambda (form env)
+  (lambda (form)
     ; later we may add things that are not expressions.
-    (eval-exp form env)))
+    (eval-exp form init-env)))
 
 ; eval-exp is the main component of the interpreter
 
 (define eval-exp
   (lambda (exp env)
     (cases expression exp
+      ;;Literals are evaluated as their values
       [lit-exp (datum) datum]
+      ;;Quote expressions shed their quote
       [quote-exp (data) (cadr data)]
+      ;;Variables such as x or + use the environment to apply their values
       [var-exp (id)
                (apply-env env id)]
-      [app-exp (rator rands)
-               (let ([proc-value (eval-exp rator env)]
-                     [args (eval-rands rands env)])
+      ;;Apps determine the value of the operator from the environment, then evaluate all the expressions and apply the proc to that
+      [app-exp (op args)
+               (let ([proc-value (eval-exp op env)]
+                     [args (eval-exps args env)])
                  (apply-proc proc-value args))]
+      ;;If expressions evalute the conditions, if it is false it returns the value of the else, if it is true it returns the value of the then both evaluated
       [if-exp (cond then else)
               (if (equal? (eval-exp cond env) #f) (eval-exp else env)
                   (eval-exp then env))]
-      [lambda-exp (id body)
-                  (make-closure id body env)]
+      ;;Lambda exps create closures with the vars, bodies, and the current environment
+      [lambda-exp (vars bodies)
+                  (make-closure vars bodies env)]
       [else (error 'eval-exp "Bad abstract syntax: ~a" exp)])))
 
-; evaluate the list of operands, putting results into a list
+;(trace eval-exp)
 
-(define eval-rands
+; evaluate the list of expressions, putting results into a list
+(define eval-exps
   (lambda (rands env)
     (let loop ([r '()]
                [exps rands])
@@ -455,14 +462,16 @@
 (define apply-proc
   (lambda (proc-value args)
     (cases proc-val proc-value
+      ;;If primitive, simply applies the primitive
       [prim-proc (op) (apply-prim-proc op args)]
-      ; You will add other cases
-      [closure (id body env)
-               (eval-exp body (extend-env id body env))]
+      ;;If it is a closer, looks at the bodies and evaluates all of them in the context of the expanded environment based on the passed args pairing them with the vars in the closure and the env
+      [closure (vars bodies env)
+               (last (eval-exps bodies (extend-env vars (list->vector args) env)))]
       [else (error 'apply-proc
                    "Attempt to apply bad procedure: ~s" 
                    proc-value)])))
 
+;;Does caddr, caadr, etc. by looping
 (define apply-cr
   (lambda (cr ls)
     (if (= (length cr) 1) ls
@@ -512,7 +521,7 @@
       [(list->vector) (list->vector (1st args))]
       [(list?) (list? (1st args))]
       [(pair?) (pair? (1st args))]
-      [(procedure?) (procedure? (1st args))]
+      [(procedure?) (proc-val? (1st args))]
       [(vector->list) (vector->list (1st args))]
       [(vector) (vector (1st args))]
       [(make-vector) (make-vector (1st args))]
@@ -547,4 +556,12 @@
       (rep))))  ; tail-recursive, so stack doesn't grow.
 
 (define eval-one-exp
-  (lambda (x) (top-level-eval (parse-exp x) init-env)))
+  (lambda (x) (top-level-eval (parse-exp x))))
+
+
+;; (app-exp
+;;  (lambda-exp (x)
+;;              ((app-exp (var-exp +)
+;;                        ((var-exp x) (lit-exp 1)))
+;;               (app-exp (var-exp +) ((var-exp x) (lit-exp 1)))))
+;;  ((lit-exp 1)))
