@@ -1,6 +1,7 @@
 #lang racket
 
 (require "../chez-init.rkt")
+(require racket/trace)
 (provide eval-one-exp)
 
 ;-------------------+
@@ -96,7 +97,21 @@
 
 (define-datatype proc-val proc-val?
   [prim-proc
-   (name symbol?)])
+   (name symbol?)]
+  [closure
+   (id (list-of? symbol?))
+   (body (list-of? expression?))
+   (env environment?)])
+
+;-------------------+
+;                   |
+; sec:CLOSURES      |
+;                   |
+;-------------------+
+
+(define make-closure
+  (lambda (id body env)
+    (closure id body env)))
   
 ;-------------------+
 ;                   |
@@ -374,7 +389,6 @@
                                  (vector-ref vals pos)
                                  (apply-env env sym)))])))
 
-
 ;-----------------------+
 ;                       |
 ;  sec:SYNTAX EXPANSION |
@@ -401,34 +415,38 @@
 ; top-level-eval evaluates a form in the global environment
 
 (define top-level-eval
-  (lambda (form)
+  (lambda (form env)
     ; later we may add things that are not expressions.
-    (eval-exp form)))
+    (eval-exp form env)))
 
 ; eval-exp is the main component of the interpreter
 
 (define eval-exp
-  (lambda (exp)
+  (lambda (exp env)
     (cases expression exp
       [lit-exp (datum) datum]
       [quote-exp (data) (cadr data)]
       [var-exp (id)
-               (apply-env init-env id)]
+               (apply-env env id)]
       [app-exp (rator rands)
-               (let ([proc-value (eval-exp rator)]
-                     [args (eval-rands rands)])
+               (let ([proc-value (eval-exp rator env)]
+                     [args (eval-rands rands env)])
                  (apply-proc proc-value args))]
       [if-exp (cond then else)
-              (if (equal? (eval-exp cond) #f) (eval-exp else)
-                  (eval-exp then))]
-      [lambda-exp ()]
+              (if (equal? (eval-exp cond env) #f) (eval-exp else env)
+                  (eval-exp then env))]
+      [lambda-exp (id body)
+                  (make-closure id body env)]
       [else (error 'eval-exp "Bad abstract syntax: ~a" exp)])))
 
 ; evaluate the list of operands, putting results into a list
 
 (define eval-rands
-  (lambda (rands)
-    (map eval-exp rands)))
+  (lambda (rands env)
+    (let loop ([r '()]
+               [exps rands])
+      (if (null? exps) r
+          (loop (append r (list (eval-exp (car exps) env))) (cdr exps))))))
 
 ;  Apply a procedure to its arguments.
 ;  At this point, we only have primitive procedures.  
@@ -439,6 +457,8 @@
     (cases proc-val proc-value
       [prim-proc (op) (apply-prim-proc op args)]
       ; You will add other cases
+      [closure (id body env)
+               (eval-exp body (extend-env id body env))]
       [else (error 'apply-proc
                    "Attempt to apply bad procedure: ~s" 
                    proc-value)])))
@@ -508,6 +528,8 @@
                    "Bad primitive procedure name: ~s" 
                    prim-proc))])))
 
+;;(trace apply-prim-proc)
+
 (define reverse
   (lambda (lst)
     (let loop ([lst lst] [lst-reversed '()])
@@ -525,4 +547,4 @@
       (rep))))  ; tail-recursive, so stack doesn't grow.
 
 (define eval-one-exp
-  (lambda (x) (top-level-eval (parse-exp x))))
+  (lambda (x) (top-level-eval (parse-exp x) init-env)))
