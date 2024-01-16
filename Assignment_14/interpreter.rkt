@@ -539,8 +539,8 @@
       [(vector-set!) (vector-set! (1st args) (2nd args) (3rd args))]
       [(display) (display (1st args))]
       [(newline) (newline)]
-      [(map) (map (car args) (cdr args))]
-      [(apply) (apply (car args) (cdr args))]
+      [(map) (map (car args) (cadr args))]
+      [(apply) (apply (car args) (cadr args))]
       [else (if (cr? prim-proc) (apply-cr (cdr (reverse (string->list (symbol->string prim-proc)))) (1st args))
                 (error 'apply-prim-proc 
                    "Bad primitive procedure name: ~s" 
