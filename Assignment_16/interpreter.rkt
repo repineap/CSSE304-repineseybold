@@ -452,8 +452,17 @@
                           vals))]
       [let*-exp (nested bodies)
                 (syntax-expand nested)]
-      [letrec-exp (defs bodies) exp]
-      [namedlet-exp (name defs bodies) exp]
+      [letrec-exp (defs bodies) (let* ([split (split-lambdas defs)]
+                                       [lams (car split)]
+                                       [vals (cdr split)])
+                                  (let-exp (append (expand-syntaxes vals)
+                                                   (map (lambda (x) (cons (car x) (quote-exp ''undef))) lams))
+                                           (append (map (lambda (lam) (set!-exp (car lam) (syntax-expand (cdr lam)))) lams)
+                                                 (expand-syntaxes bodies))))]
+                                  
+      [namedlet-exp (name defs bodies) (syntax-expand (letrec-exp (list (cons name (lambda-exp (map car defs)
+                                                                                bodies)))
+                                                   (list (app-exp (var-exp name) (map cdr defs)))))]
       [if-exp (conditional then else) (if-exp (syntax-expand conditional)
                                               (syntax-expand then)
                                               (syntax-expand else))]
@@ -488,6 +497,24 @@
                [l ls])
       (if (null? l) r
           (loop (append r (list (syntax-expand (car l)))) (cdr l))))))
+
+(define lambda-exp?
+  (lambda (val)
+    (if (expression? val)
+        (cases expression val
+          [lambda-exp (one two) #t]
+          [lambda-rest-exp (one two) #t]
+          [else #f])
+        #f)))
+
+(define split-lambdas
+  (lambda (defs)
+    (let loop ([lam '()]
+               [val '()]
+               [d defs])
+      (if (null? d) (cons lam val)
+          (if (lambda-exp? (cdar d)) (loop (append lam (list (car d))) val (cdr d))
+              (loop lam (append val (list (car d))) (cdr d)))))))
 
 ;---------------------------------------+
 ;                                       |
@@ -583,8 +610,8 @@
         (if (equal? (car cr) #\a) (apply-cr (cdr cr) (car ls))
             (apply-cr (cdr cr) (cdr ls))))))
 
-(define *prim-proc-names* '(+ - * / add1 sub1 cons = zero? not < <= >= > car cdr list null? assq eq? equal? length list->vector list? pair? procedure? vector->list vector make-vector
-                    vector-ref vector? number? symbol? vector-set! display newline map apply
+(define *prim-proc-names* '(+ - *  / add1 sub1 cons = zero? not < <= >= > car cdr list null? assq eq? equal? length list->vector list? pair? procedure? vector->list vector make-vector
+                    vector-ref vector? number? symbol? vector-set! display newline map apply eqv? append quotient list-tail
                     caar cadr cdar cddr caaar caadr cadar caddr cdaar cdadr cddar cdddr caaaar caaadr caadar caaddr cadaar
                     cadadr caddar cadddr cdaaar cdaadr cdadar cdaddr cddaar cddadr cdddar cddddr))
 
@@ -640,6 +667,10 @@
       [(newline) (newline)]
       [(map) (map-proc (car args) (cdr args))]
       [(apply) (apply-proc (car args) (cadr args))]
+      [(eqv?) (eqv? (1st args) (2nd args))]
+      [(append) (apply append args)]
+      [(quotient) (quotient (1st args) (2nd args))]
+      [(list-tail) (list-tail (1st args) (2nd args))]
       [else (if (cr? prim-proc) (apply-cr (cdr (reverse (string->list (symbol->string prim-proc)))) (1st args))
                 (error 'apply-prim-proc 
                    "Bad primitive procedure name: ~s" 
@@ -689,6 +720,7 @@
 (provide quasiquote-enabled?)
 (define quasiquote-enabled?
          (lambda () (error "nyi"))) ; make this return 'yes if you're trying quasiquote
+
 ;; This is the starting code for the Y Combinator final
 ;; 1 point question.  Dump the y2 and advanced-letrec
 ;; into your interpreter to get the tests working.
