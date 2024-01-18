@@ -212,7 +212,7 @@
          [(eqv? (car exp) 'set!)
           (let ([c (set!-checker exp)]) (when c c))
           (let ([body (parse-exp (caddr exp))])
-            (if (body-checker body) (error 'parse-exp "bad set! body: ~s" exp)
+            (if (not (expression? body)) (error 'parse-exp "bad set! body: ~s" body)
                 (set!-exp (cadr exp)
                           body)))]
          [(eqv? (car exp) 'begin)
@@ -289,6 +289,7 @@
 
 (define body-checker
   (lambda (exp)
+    
     (cases expression exp
       [lit-exp (val) #f]
       [else #t])))
@@ -420,6 +421,17 @@
                                  (vector-ref vals pos)
                                  (apply-env env sym)))])))
 
+(define modify-env
+  (lambda (env sym newval)
+    (cases environment env
+      [empty-env-record ()
+                        (error 'env "cannot set value of undefined var" sym)]
+      [extended-env-record (syms vals env)
+                           (let ([pos (list-find-position sym syms)])
+                             (if (number? pos)
+                                 (vector-set! vals pos newval)
+                                 (modify-env env sym newval)))])))
+
 ;-----------------------+
 ;                       |
 ;  sec:SYNTAX EXPANSION |
@@ -539,6 +551,8 @@
       ;;
       [lambda-rest-exp (var bodies)
                        (rest-closure var bodies env)]
+      [set!-exp (id def)
+                (modify-env env id (eval-exp def env))]
       [else (error 'eval-exp "Bad abstract syntax: ~a" exp)])))
 
 ;(trace eval-exp)
