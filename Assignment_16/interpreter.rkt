@@ -287,13 +287,6 @@
                       id
                       (unparse-exp def))])))
 
-(define body-checker
-  (lambda (exp)
-    
-    (cases expression exp
-      [lit-exp (val) #f]
-      [else #t])))
-
 (define parse-exps
   (lambda (ls)
     (let loop ([l ls]
