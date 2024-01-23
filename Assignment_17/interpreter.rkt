@@ -2,7 +2,7 @@
 
 (require "../chez-init.rkt")
 (require racket/trace)
-(provide eval-one-exp)
+(provide eval-one-exp reset-global-env)
 
 ;-------------------+
 ;                   |
@@ -75,7 +75,10 @@
    (conds (listof expression?))
    (bodies (listof expression?))]
   [begin-exp
-    (bodies (listof expression?))])
+    (bodies (listof expression?))]
+  [define-exp
+    (symbol symbol?)
+    (value expression?)])
    
 
 (define prim-proc?
@@ -92,6 +95,7 @@
   
 (define-datatype environment environment?
   [empty-env-record]
+  [global-env-record]
   [extended-env-record
    (syms (list-of? symbol?))
    (vals vector?)
@@ -223,6 +227,8 @@
           (and-exp (parse-exps (cdr exp)))]
          [(eqv? (car exp) 'cond)
           (cond-exp (parse-exps (map car (cdr exp))) (parse-exps (map cadr (cdr exp))))]
+         [(eqv? (car exp) 'define)
+          (define-exp (cadr exp) (parse-exp (caddr exp)))]
          [else
           (let ([c (app-checker exp)]) (when c c))
           (app-exp (parse-exp (car exp))
@@ -408,17 +414,44 @@
     (cases environment env 
       [empty-env-record ()      
                         (error 'env "variable ~s not found." sym)]
+      [global-env-record ()
+                         (apply-env (global-storage 'get) sym)]
       [extended-env-record (syms vals env)
                            (let ((pos (list-find-position sym syms)))
                              (if (number? pos)
                                  (vector-ref vals pos)
                                  (apply-env env sym)))])))
 
+(define *prim-proc-names* '(test + - *  / add1 sub1 cons = zero? not < <= >= > car cdr list null? assq eq? equal? length list->vector list? pair? procedure? vector->list vector make-vector
+                    vector-ref vector? number? symbol? vector-set! display newline map apply eqv? append quotient list-tail
+                    caar cadr cdar cddr caaar caadr cadar caddr cdaar cdadr cddar cdddr caaaar caaadr caadar caaddr cadaar
+                    cadadr caddar cadddr cdaaar cdaadr cdadar cdaddr cddaar cddadr cdddar cddddr))
+
+(define init-env         ; for now, our initial global environment only contains 
+  (extend-env            ; procedure names.  Recall that an environment associates
+   *prim-proc-names*   ;  a value (not an expression) with an identifier.
+   (list->vector (map prim-proc      
+        *prim-proc-names*))
+   (empty-env)))
+
+(define global-storage
+  (let ([env-state init-env])
+    (lambda args
+      (case (car args)
+        [(add) (set! env-state (extend-env (list (cadr args)) (vector (caddr args)) env-state))]
+        [(set)  (modify-env env-state (cadr args) (caddr args))]
+        [(get) env-state]
+        [(clear) (set! env-state init-env)]))))
+
+;(trace global-storage)
+
 (define modify-env
   (lambda (env sym newval)
     (cases environment env
       [empty-env-record ()
                         (error 'env "cannot set value of undefined var" sym)]
+      [global-env-record ()
+                         (global-storage 'set sym newval)]
       [extended-env-record (syms vals env)
                            (let ([pos (list-find-position sym syms)])
                              (if (number? pos)
@@ -455,7 +488,7 @@
       [letrec-exp (defs bodies) (let* ([split (split-lambdas defs)]
                                        [lams (car split)]
                                        [vals (cdr split)])
-                                  (let-exp (append (map (lambda (x) (cons (car x) (syntax-expand (cdr x)))) vals)
+                                  (let-exp (append (expand-syntaxes vals)
                                                    (map (lambda (x) (cons (car x) (quote-exp ''undef))) lams))
                                            (append (map (lambda (lam) (set!-exp (car lam) (syntax-expand (cdr lam)))) lams)
                                                  (expand-syntaxes bodies))))]
@@ -489,6 +522,7 @@
                                  [else (if-exp (syntax-expand (car conds))
                                        (syntax-expand (car bodies))
                                        (syntax-expand (cond-exp (cdr conds) (cdr bodies))))])]
+      [define-exp (sym value) (define-exp sym (syntax-expand value))]
       [else exp])))
 
 (define expand-syntaxes
@@ -536,8 +570,12 @@
 (define top-level-eval
   (lambda (form)
     ; later we may add things that are not expressions.
-    (eval-exp form init-env)))
+    (eval-exp form (global-env-record))))
 
+
+(define reset-global-env
+  (lambda ()
+    (global-storage 'clear)))
 ; eval-exp is the main component of the interpreter
 
 (define eval-exp
@@ -573,6 +611,8 @@
                        (rest-closure var bodies env)]
       [set!-exp (id def)
                 (modify-env env id (eval-exp def env))]
+      [define-exp (sym value) (global-storage 'add sym (eval-exp value env))]
+        
       [else (error 'eval-exp "Bad abstract syntax: ~a" exp)])))
 
 ;(trace eval-exp)
@@ -583,7 +623,7 @@
     (let loop ([r '()]
                [exps rands])
       (if (null? exps) r
-          (loop (append r (list (eval-exp (car exps) env))) (cdr exps))))))
+            (loop (append r (list (eval-exp (car exps) env))) (cdr exps))))))
 
 ;  Apply a procedure to its arguments.
 ;  At this point, we only have primitive procedures.  
@@ -610,12 +650,9 @@
         (if (equal? (car cr) #\a) (apply-cr (cdr cr) (car ls))
             (apply-cr (cdr cr) (cdr ls))))))
 
-(define *prim-proc-names* '(+ - *  / add1 sub1 cons = zero? not < <= >= > car cdr list null? assq eq? equal? length list->vector list? pair? procedure? vector->list vector make-vector
-                    vector-ref vector? number? symbol? vector-set! display newline map apply eqv? append quotient list-tail
-                    caar cadr cdar cddr caaar caadr cadar caddr cdaar cdadr cddar cdddr caaaar caaadr caadar caaddr cadaar
-                    cadadr caddar cadddr cdaaar cdaadr cdadar cdaddr cddaar cddadr cdddar cddddr))
 
-(define init-env         ; for now, our initial global environment only contains 
+
+(define base-env         ; for now, our initial global environment only contains 
   (extend-env            ; procedure names.  Recall that an environment associates
    *prim-proc-names*   ;  a value (not an expression) with an identifier.
    (list->vector (map prim-proc      
@@ -714,6 +751,7 @@
 ;;                        ((var-exp x) (lit-exp 1)))
 ;;               (app-exp (var-exp +) ((var-exp x) (lit-exp 1)))))
 ;;  ((lit-exp 1)))
+
 
 (define-syntax nyi
   (syntax-rules ()
