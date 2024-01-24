@@ -200,7 +200,7 @@
          [(eqv? (car exp) 'let*)
           (let ([c (let-checker exp)]) (when c c))
           (let*-exp (let-star-parse (2nd exp)
-                                    (car (parse-exps (cddr exp))))
+                                    (parse-exps (cddr exp)))
                     (parse-exps (cddr exp)))]
          [(eqv? (car exp) 'letrec)
           (let ([c (let-checker exp)]) (when c c))
@@ -311,7 +311,7 @@
   (lambda (vars bodies)
     (let loop ([v vars])
       (if (= (length v) 1) (let-exp (parse-lets (list (car v)))
-                                    (list bodies))
+                                    bodies)
           (let-exp (parse-lets (list (car v)))
                    (list (loop (cdr v))))))))
 
@@ -506,9 +506,10 @@
       [or-exp (exps)
               (cond [(null? exps) (lit-exp #f)]
                     [(null? (cdr exps)) (syntax-expand (car exps))]
-                    [else (if-exp (syntax-expand (car exps))
-                                   (syntax-expand (car exps))
-                                   (syntax-expand (or-exp (cdr exps))))])]
+                    [else (let-exp (list (cons 'or-part-dont-use-this-name (syntax-expand (car exps))))
+                                   (list (if-exp (var-exp 'or-part-dont-use-this-name)
+                                                 (var-exp 'or-part-dont-use-this-name)
+                                                 (syntax-expand (or-exp (cdr exps))))))])]
       [and-exp (exps)
                (cond [(null? exps) (lit-exp #t)]
                      [(null? (cdr exps)) (syntax-expand (car exps))]
@@ -612,7 +613,6 @@
       [set!-exp (id def)
                 (modify-env env id (eval-exp def env))]
       [define-exp (sym value) (global-storage 'add sym (eval-exp value env))]
-        
       [else (error 'eval-exp "Bad abstract syntax: ~a" exp)])))
 
 ;(trace eval-exp)
@@ -642,6 +642,8 @@
       [else (error 'apply-proc
                    "Attempt to apply bad procedure: ~s" 
                    proc-value)])))
+
+;(trace apply-proc)
 
 ;;Does caddr, caadr, etc. by looping
 (define apply-cr
