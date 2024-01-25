@@ -571,25 +571,49 @@
 (define top-level-eval
   (lambda (form)
     ; later we may add things that are not expressions.
-    (eval-exp form (global-env-record))))
+    (eval-exp form (global-env-record) (init-k))))
 
 
 (define reset-global-env
   (lambda ()
     (global-storage 'clear)))
-; eval-exp is the main component of the interpreter
 
+
+
+(define-datatype continuation continuation?
+  [init-k]
+  [if-exp-cps (env environment?) (then expression?) (else expression?) (k continuation?)])
+
+
+(define apply-k
+  (lambda (k v)
+    (cases continuation k
+      [init-k () v]
+      [if-exp-cps (env then else k) (if (equal? v #f)
+                                        (eval-exp else env k)
+                                        (eval-exp then env k))])))
+
+
+
+; eval-exp is the main component of the interpreter
 (define eval-exp
-  (lambda (exp env)
+  (lambda (exp env k)
     (cases expression exp
       ;;Literals are evaluated as their values
-      [lit-exp (datum) datum]
+      [lit-exp (datum)(apply-k k datum)]
       ;;Quote expressions shed their quote
-      [quote-exp (data) (cadr data)]
+      [quote-exp (data) (apply-k k (cadr data))]
       ;;Variables such as x or + use the environment to apply their values
       [var-exp (id)
-               (apply-env env id)] 
-      ;;Let expressions !!!!!Not finished from class 
+               (apply-k k (apply-env env id))]
+      ;;If expressions evalute the conditions, if it is false it returns the value of the else, if it is true it returns the value of the then both evaluated
+      [if-exp (cond then else)
+               (eval-exp cond env (if-exp-cps env then else k))]
+
+
+      ;;^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ALL ABOVE in CPS ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+      
+      ;;Let expressions !!!!!Not finished from class
        [let-exp (defs bodies)
                (last (eval-exps bodies
                           (extend-env (map car defs)
@@ -600,13 +624,9 @@
                (let ([proc-value (eval-exp op env)]
                      [args (eval-exps args env)])
                  (apply-proc proc-value args))]
-      ;;If expressions evalute the conditions, if it is false it returns the value of the else, if it is true it returns the value of the then both evaluated
-      [if-exp (cond then else)
-              (if (equal? (eval-exp cond env) #f) (eval-exp else env)
-                  (eval-exp then env))]
       ;;Lambda exps create closures with the vars, bodies, and the current environment
       [lambda-exp (vars bodies)
-                  (closure vars bodies env)]
+                  (apply-k k (closure vars bodies env))]
       ;;
       [lambda-rest-exp (var bodies)
                        (rest-closure var bodies env)]
@@ -622,8 +642,9 @@
   (lambda (rands env)
     (let loop ([r '()]
                [exps rands])
-      (if (null? exps) r
-            (loop (append r (list (eval-exp (car exps) env))) (cdr exps))))))
+      (if (null? exps)
+          r
+          (loop (append r (list (eval-exp (car exps) env))) (cdr exps))))))
 
 ;  Apply a procedure to its arguments.
 ;  At this point, we only have primitive procedures.  
