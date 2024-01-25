@@ -488,7 +488,7 @@
       [letrec-exp (defs bodies) (let* ([split (split-lambdas defs)]
                                        [lams (car split)]
                                        [vals (cdr split)])
-                                  (let-exp (append (expand-syntaxes vals)
+                                  (let-exp (append (map (lambda (x) (cons (car x) (syntax-expand (cdr x)))) vals)
                                                    (map (lambda (x) (cons (car x) (quote-exp ''undef))) lams))
                                            (append (map (lambda (lam) (set!-exp (car lam) (syntax-expand (cdr lam)))) lams)
                                                  (expand-syntaxes bodies))))]
