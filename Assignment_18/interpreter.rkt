@@ -41,8 +41,7 @@
    (var symbol?)
    (body (list-of? expression?))]
   [app-exp
-   (op expression?)
-   (args (listof expression?))]
+   (exps (listof expression?))]
   [let-exp
    (defs (listof binding?))
    (bodies (listof expression?))]
@@ -231,8 +230,7 @@
           (define-exp (cadr exp) (parse-exp (caddr exp)))]
          [else
           (let ([c (app-checker exp)]) (when c c))
-          (app-exp (parse-exp (car exp))
-                   (parse-exps (cdr exp)))])]
+          (app-exp (parse-exps exp))])]
       [else (error 'parse-exp "bad expression: ~s" exp)])))
 
 (define split-let
@@ -474,28 +472,27 @@
                                            (expand-syntaxes bodies))]
       [lambda-rest-exp (var bodies) (lambda-rest-exp var
                                                     (expand-syntaxes bodies))]
-      [app-exp (proc args) (app-exp (syntax-expand proc)
-                                    (expand-syntaxes args))]
+      [app-exp (exps) (app-exp (expand-syntaxes exps))]
       [let-exp (defs bodies)
                (let* ([split (split-let defs)]
                       [vars (car split)]
                       [vals (expand-syntaxes (cadr split))])
-                 (app-exp (lambda-exp vars
-                                      (expand-syntaxes bodies))
-                          vals))]
+                 (app-exp (cons (lambda-exp vars
+                                            (expand-syntaxes bodies))
+                          vals)))]
       [let*-exp (nested bodies)
                 (syntax-expand nested)]
       [letrec-exp (defs bodies) (let* ([split (split-lambdas defs)]
                                        [lams (car split)]
                                        [vals (cdr split)])
-                                  (let-exp (append (expand-syntaxes vals)
-                                                   (map (lambda (x) (cons (car x) (quote-exp ''undef))) lams))
-                                           (append (map (lambda (lam) (set!-exp (car lam) (syntax-expand (cdr lam)))) lams)
-                                                 (expand-syntaxes bodies))))]
+                                  (syntax-expand (let-exp (append (expand-syntaxes vals)
+                                                                  (map (lambda (x) (cons (car x) (quote-exp ''undef))) lams))
+                                                          (append (map (lambda (lam) (set!-exp (car lam) (syntax-expand (cdr lam)))) lams)
+                                                                  (expand-syntaxes bodies)))))]
                                   
       [namedlet-exp (name defs bodies) (syntax-expand (letrec-exp (list (cons name (lambda-exp (map car defs)
                                                                                 bodies)))
-                                                   (list (app-exp (var-exp name) (map cdr defs)))))]
+                                                                  (list (app-exp (cons (var-exp name) (map cdr defs))))))]
       [if-exp (conditional then else) (if-exp (syntax-expand conditional)
                                               (syntax-expand then)
                                               (syntax-expand else))]
@@ -506,17 +503,17 @@
       [or-exp (exps)
               (cond [(null? exps) (lit-exp #f)]
                     [(null? (cdr exps)) (syntax-expand (car exps))]
-                    [else (let-exp (list (cons 'or-part-dont-use-this-name (syntax-expand (car exps))))
-                                   (list (if-exp (var-exp 'or-part-dont-use-this-name)
-                                                 (var-exp 'or-part-dont-use-this-name)
-                                                 (syntax-expand (or-exp (cdr exps))))))])]
+                    [else (syntax-expand (let-exp (list (cons 'or-part-dont-use-this-name (syntax-expand (car exps))))
+                                                  (list (if-exp (var-exp 'or-part-dont-use-this-name)
+                                                                (var-exp 'or-part-dont-use-this-name)
+                                                                (syntax-expand (or-exp (cdr exps)))))))])]
       [and-exp (exps)
                (cond [(null? exps) (lit-exp #t)]
                      [(null? (cdr exps)) (syntax-expand (car exps))]
                      [else (if-exp (syntax-expand (car exps))
                                    (syntax-expand (and-exp (cdr exps)))
                                    (lit-exp #f))])]
-      [begin-exp (exps) (app-exp (lambda-exp (list) (expand-syntaxes exps)) (list))]
+      [begin-exp (exps) (app-exp (list (lambda-exp (list) (expand-syntaxes exps))))]
       [cond-exp (conds bodies) (cond
                                  [(null? conds) (lit-exp (void))]
                                  [(equal? 'else (cadar conds)) (syntax-expand (car bodies))]
@@ -582,17 +579,36 @@
 
 (define-datatype continuation continuation?
   [init-k]
-  [if-exp-cps (env environment?) (then expression?) (else expression?) (k continuation?)])
+  [if-exp-k (env environment?) (then expression?) (else expression?) (k continuation?)]
+  [proc-k (k continuation?)]
+  [eval-rest-k (exps (listof expression?)) (env environment?) (k continuation?)]
+  [cons-k (d scheme-value?) (k continuation?)]
+  [last-k]
+  [modify-k
+   (env environment?)
+   (var symbol?)
+   (k continuation?)])
 
 
 (define apply-k
   (lambda (k v)
     (cases continuation k
       [init-k () v]
-      [if-exp-cps (env then else k) (if (equal? v #f)
+      [if-exp-k (env then else k) (if (equal? v #f)
                                         (eval-exp else env k)
-                                        (eval-exp then env k))])))
+                                        (eval-exp then env k))]
+      [proc-k (k)
+              (apply-proc (car v) (cdr v))]
+      [eval-rest-k (exps env k)
+                   (eval-exps exps env (cons-k v k))]
+      [cons-k (d k)
+              (apply-k k (cons d v))]
+      [last-k ()
+              (last v)]
+      [modify-k (env var k)
+                (modify-env env var v)])))
 
+(trace apply-k)
 
 
 ; eval-exp is the main component of the interpreter
@@ -608,30 +624,28 @@
                (apply-k k (apply-env env id))]
       ;;If expressions evalute the conditions, if it is false it returns the value of the else, if it is true it returns the value of the then both evaluated
       [if-exp (cond then else)
-               (eval-exp cond env (if-exp-cps env then else k))]
-
+               (eval-exp cond env (if-exp-k env then else k))]
+      ;;Apps determine the value of the operator from the environment, then evaluate all the expressions and apply the proc to that
+      [app-exp (exps)
+               (eval-exps exps env (proc-k k))]
+      ;;Lambda exps create closures with the vars, bodies, and the current environment
+      [lambda-exp (vars bodies)
+                  (apply-k k (closure vars bodies env))]
+      ;;Same with rest exps
+      [lambda-rest-exp (var bodies)
+                       (apply-k k (rest-closure var bodies env))]
 
       ;;^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ALL ABOVE in CPS ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
       
       ;;Let expressions !!!!!Not finished from class
-       [let-exp (defs bodies)
-               (last (eval-exps bodies
-                          (extend-env (map car defs)
-                           (list->vector (eval-exps (map cdr defs) env))
-                           env)))]
-      ;;Apps determine the value of the operator from the environment, then evaluate all the expressions and apply the proc to that
-      [app-exp (op args)
-               (let ([proc-value (eval-exp op env)]
-                     [args (eval-exps args env)])
-                 (apply-proc proc-value args))]
-      ;;Lambda exps create closures with the vars, bodies, and the current environment
-      [lambda-exp (vars bodies)
-                  (apply-k k (closure vars bodies env))]
-      ;;
-      [lambda-rest-exp (var bodies)
-                       (rest-closure var bodies env)]
+;;        [let-exp (defs bodies)
+;;                (last (eval-exps bodies
+;;                           (extend-env (map car defs)
+;;                            (list->vector (eval-exps (map cdr defs) env))
+;;                            env)))]
+      
       [set!-exp (id def)
-                (modify-env env id (eval-exp def env))]
+                (eval-exp def env (modify-k env id k))]
       [define-exp (sym value) (global-storage 'add sym (eval-exp value env))]
       [else (error 'eval-exp "Bad abstract syntax: ~a" exp)])))
 
@@ -639,12 +653,18 @@
 
 ; evaluate the list of expressions, putting results into a list
 (define eval-exps
-  (lambda (rands env)
-    (let loop ([r '()]
-               [exps rands])
-      (if (null? exps)
-          r
-          (loop (append r (list (eval-exp (car exps) env))) (cdr exps))))))
+  (lambda (exps env k)
+    (if (null? exps)
+        (apply-k k '())
+        (eval-exp (car exps) env (eval-rest-k (cdr exps) env k)))))
+
+;; (define eval-exps
+;;   (lambda (rands env)
+;;     (let loop ([r '()]
+;;                [exps rands])
+;;       (if (null? exps)
+;;           r
+;;           (loop (append r (list (eval-exp (car exps) env))) (cdr exps))))))
 
 ;  Apply a procedure to its arguments.
 ;  At this point, we only have primitive procedures.  
@@ -657,7 +677,7 @@
       [prim-proc (op) (apply-prim-proc op args)]
       ;;If it is a closer, looks at the bodies and evaluates all of them in the context of the expanded environment based on the passed args pairing them with the vars in the closure and the env
       [closure (vars bodies env)
-               (last (eval-exps bodies (extend-env vars (list->vector args) env)))]
+               (eval-exps bodies (extend-env vars (list->vector args) env) (last-k))]
       [rest-closure (var bodies env)
                     (last (eval-exps bodies (extend-env (list var) (vector args) env)))]
       [else (error 'apply-proc
